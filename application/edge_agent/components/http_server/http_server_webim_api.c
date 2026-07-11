@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "cap_im_local.h"
+#include "cap_im_voice.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -258,6 +259,11 @@ static esp_err_t webim_outbound_cb(const cap_im_local_message_t *message, void *
         ESP_LOGD(TAG, "outbound_cb: dropped (no message or chat_id)");
         return ESP_OK;
     }
+#if CONFIG_APP_CLAW_CAP_IM_VOICE
+    if (strcmp(message->channel, CAP_IM_VOICE_CHANNEL) == 0) {
+        return cap_im_voice_handle_outbound(message);
+    }
+#endif
     if (strcmp(message->channel, WEB_IM_CHANNEL) != 0) {
         ESP_LOGD(TAG, "outbound_cb: dropped channel=%s (expected %s)",
                  message->channel, WEB_IM_CHANNEL);

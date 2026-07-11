@@ -28,6 +28,9 @@
 #if CONFIG_APP_CLAW_CAP_IM_WECHAT
 #include "cap_im_wechat.h"
 #endif
+#if CONFIG_APP_CLAW_CAP_IM_VOICE
+#include "cap_im_voice.h"
+#endif
 #include "app_config.h"
 
 #define APP_ENABLE_MEM_LOG        (0)
@@ -411,6 +414,9 @@ void app_main(void)
     ESP_ERROR_CHECK(app_claw_start(s_claw_config));
 #if CONFIG_APP_CLAW_CAP_IM_LOCAL
     ESP_ERROR_CHECK(http_server_webim_bind_im());
+#endif
+#if CONFIG_APP_CLAW_CAP_IM_VOICE
+    ESP_ERROR_CHECK(cap_im_voice_start());
 #endif
 
     register_wifi_command();

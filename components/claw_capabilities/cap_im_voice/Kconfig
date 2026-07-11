@@ -1,0 +1,57 @@
+menu "Voice IM Channel (cap_im_voice)"
+
+    config APP_CLAW_CAP_IM_VOICE
+        bool "Enable voice channel (push-to-talk mic -> STT -> agent -> TTS -> speaker)"
+        default n
+        depends on APP_CLAW_CAP_IM_LOCAL
+        help
+            Adds a local voice channel to the agent. Hold the push-to-talk
+            button to speak; audio is transcribed via the OpenAI Whisper API,
+            injected into the agent as a normal IM message on channel "voice",
+            and the reply is spoken through the I2S speaker via OpenAI TTS.
+
+    if APP_CLAW_CAP_IM_VOICE
+
+        config CAP_IM_VOICE_OPENAI_API_KEY
+            string "OpenAI API key (for Whisper STT and TTS)"
+            default ""
+
+        config CAP_IM_VOICE_TTS_VOICE
+            string "TTS voice"
+            default "alloy"
+
+        config CAP_IM_VOICE_PTT_GPIO
+            int "Push-to-talk button GPIO (active low)"
+            default 0
+
+        config CAP_IM_VOICE_MAX_RECORD_SECONDS
+            int "Maximum utterance length (seconds)"
+            default 30
+
+        menu "Microphone (INMP441, I2S std RX)"
+            config CAP_IM_VOICE_MIC_BCLK_GPIO
+                int "SCK (bit clock) GPIO"
+                default 4
+            config CAP_IM_VOICE_MIC_WS_GPIO
+                int "WS (word select) GPIO"
+                default 5
+            config CAP_IM_VOICE_MIC_SD_GPIO
+                int "SD (data) GPIO"
+                default 6
+        endmenu
+
+        menu "Speaker (MAX98357A, I2S std TX)"
+            config CAP_IM_VOICE_SPK_BCLK_GPIO
+                int "BCLK (bit clock) GPIO"
+                default 15
+            config CAP_IM_VOICE_SPK_LRC_GPIO
+                int "LRC (word select) GPIO"
+                default 16
+            config CAP_IM_VOICE_SPK_DIN_GPIO
+                int "DIN (data) GPIO"
+                default 7
+        endmenu
+
+    endif
+
+endmenu

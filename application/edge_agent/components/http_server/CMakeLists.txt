@@ -30,6 +30,7 @@ set(http_server_requires
     app_config
     app_claw
     cap_im_local
+    cap_im_voice
     claw_cap
     esp_http_server
     heap
