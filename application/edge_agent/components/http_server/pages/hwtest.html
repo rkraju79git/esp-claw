@@ -176,7 +176,10 @@ async function capture(btn) {
     const ct = r.headers.get('content-type') || '';
     if (ct.startsWith('image/')) {
       const blob = await r.blob();
-      img.src = URL.createObjectURL(blob);
+      if (img.dataset.url) URL.revokeObjectURL(img.dataset.url);
+      const url = URL.createObjectURL(blob);
+      img.dataset.url = url;
+      img.src = url;
       img.style.display = 'block';
       status.textContent = '(' + ct + ', ' + Math.round(blob.size/1024) + ' KB)';
     } else {

@@ -453,6 +453,17 @@ static esp_err_t hwtest_speaker_handler(httpd_req_t *req)
 #define HWTEST_CAM_PREVIEW_H 240
 #define HWTEST_FOURCC_JPEG   0x4745504A /* v4l2_fourcc('J','P','E','G') */
 
+/* Per-frame dequeue timeout when capturing. */
+#define HWTEST_CAM_CAPTURE_TIMEOUT_MS 1500
+
+/* The DVP driver keeps a small ring of buffers that it fills continuously. If
+ * nobody dequeues between captures the ring fills and the frames in it go stale,
+ * so a re-capture would hand back the SAME old image. Flush this many frames
+ * (drain the ring) before keeping one, so every capture is a fresh frame.
+ * The ring is 3 buffers; 3 flushes guarantees the kept frame post-dates the
+ * request. At 10 fps this is ~0.4 s. */
+#define HWTEST_CAM_FLUSH_FRAMES 3
+
 static const char *hwtest_camera_dev_path(void)
 {
     dev_camera_handle_t *handle = NULL;
@@ -465,46 +476,57 @@ static const char *hwtest_camera_dev_path(void)
     return handle->dev_path;
 }
 
-/* Build a 24-bit BMP from the luminance plane of a YUYV frame, downsampling
- * to HWTEST_CAM_PREVIEW_W x HWTEST_CAM_PREVIEW_H. Returns a SPIRAM buffer the
- * caller must free, or NULL. */
+/* Build an 8-bit grayscale BMP from the luminance plane of a YUYV frame,
+ * downsampling to HWTEST_CAM_PREVIEW_W x HWTEST_CAM_PREVIEW_H. Grayscale (not
+ * 24-bit RGB) because the Y plane is all we decode — this is ~1/3 the bytes,
+ * so the browser download is ~3x faster, with no loss for what we display.
+ * Returns a SPIRAM buffer the caller must free, or NULL. */
 static uint8_t *hwtest_yuyv_to_bmp(const uint8_t *yuyv, uint32_t sw, uint32_t sh,
                                    size_t *out_size)
 {
     const int dw = HWTEST_CAM_PREVIEW_W;
     const int dh = HWTEST_CAM_PREVIEW_H;
-    const int row_bytes = dw * 3; /* multiple of 4 for dw=320 */
-    const size_t pixels = (size_t)row_bytes * dh;
-    const size_t total = 54 + pixels;
+    const int row_stride = (dw + 3) & ~3;        /* rows padded to 4 bytes */
+    const int palette_bytes = 256 * 4;           /* 8-bit BMP needs a palette */
+    const int header_bytes = 54 + palette_bytes; /* 14 file + 40 DIB + palette */
+    const size_t pixels = (size_t)row_stride * dh;
+    const size_t total = header_bytes + pixels;
 
     uint8_t *bmp = heap_caps_malloc(total, MALLOC_CAP_SPIRAM);
     if (!bmp) {
         return NULL;
     }
-    memset(bmp, 0, 54);
+    memset(bmp, 0, header_bytes);
     bmp[0] = 'B';
     bmp[1] = 'M';
     uint32_t v = total;         memcpy(bmp + 2, &v, 4);
-    v = 54;                     memcpy(bmp + 10, &v, 4);
-    v = 40;                     memcpy(bmp + 14, &v, 4);
+    v = header_bytes;           memcpy(bmp + 10, &v, 4); /* pixel data offset */
+    v = 40;                     memcpy(bmp + 14, &v, 4); /* DIB header size */
     v = dw;                     memcpy(bmp + 18, &v, 4);
     v = dh;                     memcpy(bmp + 22, &v, 4);
-    uint16_t planes = 1, bpp = 24;
+    uint16_t planes = 1, bpp = 8;
     memcpy(bmp + 26, &planes, 2);
     memcpy(bmp + 28, &bpp, 2);
-    v = pixels;                 memcpy(bmp + 34, &v, 4);
+    v = pixels;                 memcpy(bmp + 34, &v, 4); /* image size */
+    v = 256;                    memcpy(bmp + 46, &v, 4); /* colors used */
+
+    /* Grayscale palette: entry i = (B=i, G=i, R=i, 0). */
+    uint8_t *pal = bmp + 54;
+    for (int i = 0; i < 256; i++) {
+        *pal++ = (uint8_t)i;
+        *pal++ = (uint8_t)i;
+        *pal++ = (uint8_t)i;
+        *pal++ = 0;
+    }
 
     /* BMP rows are bottom-up. Y is byte 0 of each YUYV pair. */
     for (int y = 0; y < dh; y++) {
         uint32_t sy = (uint32_t)y * sh / dh;
         const uint8_t *srow = yuyv + (size_t)sy * sw * 2;
-        uint8_t *drow = bmp + 54 + (size_t)(dh - 1 - y) * row_bytes;
+        uint8_t *drow = bmp + header_bytes + (size_t)(dh - 1 - y) * row_stride;
         for (int x = 0; x < dw; x++) {
             uint32_t sx = (uint32_t)x * sw / dw;
-            uint8_t luma = srow[sx * 2];
-            *drow++ = luma;
-            *drow++ = luma;
-            *drow++ = luma;
+            *drow++ = srow[sx * 2];
         }
     }
     *out_size = total;
@@ -546,30 +568,34 @@ static esp_err_t hwtest_camera_handler(httpd_req_t *req)
         return hwtest_reply_error(req, "camera device not found");
     }
 
-    /* Open once and keep it open across requests. This DVP driver re-initializes
-     * the whole camera controller on every open and de-registers the video
-     * device on close, so an open/close per capture fails the second time
-     * ("Failed to open /dev/video2, errno=2"). Requesting JPEG here also makes
-     * it block ~30s in stream-settle and fail (JPEG not configured), so open
-     * with the driver default format (YUV422). */
+    /* Open once and keep it open for the life of the process. This DVP driver
+     * re-initializes the controller on every open and de-registers the video
+     * device on close, so open/close per request fails the second time
+     * ("Failed to open /dev/video2, errno=2"). We never close it. */
     if (!camera_is_open()) {
         esp_err_t open_err = camera_open(dev_path, NULL);
         if (open_err != ESP_OK) {
             return hwtest_reply_error(req, esp_err_to_name(open_err));
         }
     }
-    esp_err_t err;
 
-    /* Discard one frame so exposure/gain settle, keep the next. */
+    /* Never cache: each capture must show the live frame, not a stored one. */
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+
+    /* Flush the driver's buffer ring, then keep the next frame. Without the
+     * flush a re-capture returns a stale frame that was sitting in the ring
+     * (the image "doesn't change"); this drains those so the kept frame is
+     * captured after this request arrived. */
     uint8_t *frame = NULL;
     size_t frame_bytes = 0;
     camera_frame_info_t info = {0};
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i <= HWTEST_CAM_FLUSH_FRAMES; i++) {
         if (frame) {
             camera_release_frame(frame);
             frame = NULL;
         }
-        err = camera_capture_frame(1500, &frame, &frame_bytes, &info);
+        esp_err_t err = camera_capture_frame(HWTEST_CAM_CAPTURE_TIMEOUT_MS,
+                                             &frame, &frame_bytes, &info);
         if (err != ESP_OK) {
             /* Leave the device open — closing de-registers /dev/videoN and the
              * next request fails with errno=2. A transient capture error is
