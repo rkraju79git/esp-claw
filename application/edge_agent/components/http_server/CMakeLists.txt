@@ -49,11 +49,6 @@ if(CONFIG_APP_CLAW_LUA_MODULE_HTTP_SERVER)
     list(APPEND http_server_requires lua_module_http_server)
 endif()
 
-if(CONFIG_APP_CLAW_LUA_MODULE_CAMERA)
-    # /hwtest camera capture uses the camera HAL and the board-manager device handle.
-    list(APPEND http_server_requires lua_module_camera esp_board_manager)
-endif()
-
 idf_component_register(
     SRCS
         ${http_server_srcs}
@@ -67,6 +62,13 @@ idf_component_register(
     REQUIRES
         ${http_server_requires}
 )
+
+# /hwtest camera capture uses the camera HAL (lua_module_camera) and the
+# board-manager device handle (esp_board_manager). These only exist when the
+# camera Lua module is enabled, and config-conditional REQUIRES do not work
+# (requirements are resolved before CONFIG_* is available). optional_requires
+# links them when present and is skipped otherwise — the source is config-gated.
+idf_component_optional_requires(PRIVATE lua_module_camera esp_board_manager)
 
 # Rebuild the component whenever the bundled UI asset changes on disk.
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${FRONTEND_DIST_HTML_GZ}")
