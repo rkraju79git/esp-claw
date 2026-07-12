@@ -448,9 +448,6 @@ static esp_err_t hwtest_speaker_handler(httpd_req_t *req)
 
 #if CONFIG_APP_CLAW_LUA_MODULE_CAMERA
 
-/* Downsample size for the browser preview. */
-#define HWTEST_CAM_PREVIEW_W 320
-#define HWTEST_CAM_PREVIEW_H 240
 #define HWTEST_FOURCC_JPEG   0x4745504A /* v4l2_fourcc('J','P','E','G') */
 
 /* Per-frame dequeue timeout when capturing. */
@@ -476,19 +473,24 @@ static const char *hwtest_camera_dev_path(void)
     return handle->dev_path;
 }
 
-/* Build an 8-bit grayscale BMP from the luminance plane of a YUYV frame,
- * downsampling to HWTEST_CAM_PREVIEW_W x HWTEST_CAM_PREVIEW_H. Grayscale (not
- * 24-bit RGB) because the Y plane is all we decode — this is ~1/3 the bytes,
- * so the browser download is ~3x faster, with no loss for what we display.
- * Returns a SPIRAM buffer the caller must free, or NULL. */
-static uint8_t *hwtest_yuyv_to_bmp(const uint8_t *yuyv, uint32_t sw, uint32_t sh,
-                                   size_t *out_size)
+static inline uint8_t hwtest_clamp_u8(int v)
 {
-    const int dw = HWTEST_CAM_PREVIEW_W;
-    const int dh = HWTEST_CAM_PREVIEW_H;
-    const int row_stride = (dw + 3) & ~3;        /* rows padded to 4 bytes */
-    const int palette_bytes = 256 * 4;           /* 8-bit BMP needs a palette */
-    const int header_bytes = 54 + palette_bytes; /* 14 file + 40 DIB + palette */
+    return v < 0 ? 0 : (v > 255 ? 255 : (uint8_t)v);
+}
+
+/* Build a BMP from a YUYV frame, downsampling from sw x sh to dw x dh.
+ *
+ *  - color=false: 8-bit grayscale (luma plane only) — ~1/3 the bytes, fastest.
+ *  - color=true : 24-bit RGB, decoding the YUYV chroma (BT.601, integer math).
+ *
+ * Returns a SPIRAM buffer the caller must free, or NULL on alloc failure. */
+static uint8_t *hwtest_yuyv_to_bmp(const uint8_t *yuyv, uint32_t sw, uint32_t sh,
+                                   int dw, int dh, bool color, size_t *out_size)
+{
+    const int bpp = color ? 24 : 8;
+    const int palette_bytes = color ? 0 : 256 * 4;   /* 8-bit needs a palette */
+    const int header_bytes = 54 + palette_bytes;
+    const int row_stride = color ? ((dw * 3 + 3) & ~3) : ((dw + 3) & ~3);
     const size_t pixels = (size_t)row_stride * dh;
     const size_t total = header_bytes + pixels;
 
@@ -504,29 +506,40 @@ static uint8_t *hwtest_yuyv_to_bmp(const uint8_t *yuyv, uint32_t sw, uint32_t sh
     v = 40;                     memcpy(bmp + 14, &v, 4); /* DIB header size */
     v = dw;                     memcpy(bmp + 18, &v, 4);
     v = dh;                     memcpy(bmp + 22, &v, 4);
-    uint16_t planes = 1, bpp = 8;
+    uint16_t planes = 1, bpp16 = (uint16_t)bpp;
     memcpy(bmp + 26, &planes, 2);
-    memcpy(bmp + 28, &bpp, 2);
+    memcpy(bmp + 28, &bpp16, 2);
     v = pixels;                 memcpy(bmp + 34, &v, 4); /* image size */
-    v = 256;                    memcpy(bmp + 46, &v, 4); /* colors used */
-
-    /* Grayscale palette: entry i = (B=i, G=i, R=i, 0). */
-    uint8_t *pal = bmp + 54;
-    for (int i = 0; i < 256; i++) {
-        *pal++ = (uint8_t)i;
-        *pal++ = (uint8_t)i;
-        *pal++ = (uint8_t)i;
-        *pal++ = 0;
+    if (!color) {
+        v = 256;                memcpy(bmp + 46, &v, 4); /* colors used */
+        uint8_t *pal = bmp + 54;                         /* grayscale palette */
+        for (int i = 0; i < 256; i++) {
+            *pal++ = (uint8_t)i; *pal++ = (uint8_t)i; *pal++ = (uint8_t)i; *pal++ = 0;
+        }
     }
 
-    /* BMP rows are bottom-up. Y is byte 0 of each YUYV pair. */
+    /* BMP rows are bottom-up. YUYV packs two pixels as [Y0 U Y1 V]. */
     for (int y = 0; y < dh; y++) {
         uint32_t sy = (uint32_t)y * sh / dh;
         const uint8_t *srow = yuyv + (size_t)sy * sw * 2;
         uint8_t *drow = bmp + header_bytes + (size_t)(dh - 1 - y) * row_stride;
         for (int x = 0; x < dw; x++) {
             uint32_t sx = (uint32_t)x * sw / dw;
-            *drow++ = srow[sx * 2];
+            uint8_t luma = srow[sx * 2];
+            if (!color) {
+                *drow++ = luma;
+                continue;
+            }
+            /* Shared chroma from the even pixel of the YUYV pair. */
+            const uint8_t *pair = srow + (sx & ~1u) * 2;
+            int u = (int)pair[1] - 128;
+            int vv = (int)pair[3] - 128;
+            int r = luma + ((359 * vv) >> 8);
+            int g = luma - ((88 * u + 183 * vv) >> 8);
+            int b = luma + ((454 * u) >> 8);
+            *drow++ = hwtest_clamp_u8(b);   /* BMP is BGR */
+            *drow++ = hwtest_clamp_u8(g);
+            *drow++ = hwtest_clamp_u8(r);
         }
     }
     *out_size = total;
@@ -582,6 +595,23 @@ static esp_err_t hwtest_camera_handler(httpd_req_t *req)
     /* Never cache: each capture must show the live frame, not a stored one. */
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
 
+    /* Output options from the UI dropdown: ?w=&h= pick the preview size,
+     * ?color=0 forces grayscale. Defaults (no params) are the native frame
+     * size in colour — the maximum quality the stream delivers. Requested
+     * sizes are clamped to the native frame below (we downsample, never up). */
+    int req_w = 0, req_h = 0;
+    bool color = true;
+    char qbuf[16];
+    if (http_server_query_get(req, "w", qbuf, sizeof(qbuf)) == ESP_OK) {
+        req_w = atoi(qbuf);
+    }
+    if (http_server_query_get(req, "h", qbuf, sizeof(qbuf)) == ESP_OK) {
+        req_h = atoi(qbuf);
+    }
+    if (http_server_query_get(req, "color", qbuf, sizeof(qbuf)) == ESP_OK) {
+        color = (atoi(qbuf) != 0);
+    }
+
     /* Flush the driver's buffer ring, then keep the next frame. Without the
      * flush a re-capture returns a stale frame that was sitting in the ring
      * (the image "doesn't change"); this drains those so the kept frame is
@@ -611,9 +641,12 @@ static esp_err_t hwtest_camera_handler(httpd_req_t *req)
         send_err = hwtest_send_in_chunks(req, frame, frame_bytes);
     } else if (frame_bytes >= (size_t)info.width * info.height * 2 &&
                info.width && info.height) {
+        /* Clamp the requested size to the native frame (downsample only). */
+        int dw = (req_w > 0 && req_w < (int)info.width) ? req_w : (int)info.width;
+        int dh = (req_h > 0 && req_h < (int)info.height) ? req_h : (int)info.height;
         size_t bmp_size = 0;
         uint8_t *bmp = hwtest_yuyv_to_bmp(frame, info.width, info.height,
-                                          &bmp_size);
+                                          dw, dh, color, &bmp_size);
         if (bmp) {
             httpd_resp_set_type(req, "image/bmp");
             /* Large payload: send in chunks so a full socket buffer doesn't

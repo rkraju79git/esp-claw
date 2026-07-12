@@ -63,6 +63,15 @@
 
 <section>
   <h2>Camera (OV3660) &mdash; capture &amp; view</h2>
+  <label style="font-size:13px;color:#8b949e">Mode
+    <select id="cam-mode" style="margin:0 8px">
+      <option value="640x480x1">640&times;480 color (max)</option>
+      <option value="640x480x0">640&times;480 grayscale</option>
+      <option value="480x360x1">480&times;360 color</option>
+      <option value="320x240x1">320&times;240 color</option>
+      <option value="320x240x0">320&times;240 grayscale (fastest)</option>
+    </select>
+  </label>
   <button onclick="capture(this)">Capture photo</button>
   <span id="cam-status" style="font-size:12px;color:#8b949e"></span>
   <div><img id="cam-img" style="max-width:100%;margin-top:8px;border-radius:6px;display:none"></div>
@@ -172,7 +181,9 @@ async function capture(btn) {
   btn.disabled = true;
   status.textContent = 'capturing…';
   try {
-    const r = await fetch('/api/hwtest/camera?t=' + Date.now());
+    const [w, h, color] = document.getElementById('cam-mode').value.split('x');
+    const r = await fetch('/api/hwtest/camera?w=' + w + '&h=' + h +
+                          '&color=' + color + '&t=' + Date.now());
     const ct = r.headers.get('content-type') || '';
     if (ct.startsWith('image/')) {
       const blob = await r.blob();
