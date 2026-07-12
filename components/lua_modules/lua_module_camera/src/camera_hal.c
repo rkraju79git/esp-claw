@@ -504,9 +504,13 @@ static esp_err_t camera_open_locked(const char *dev_path, const camera_open_opts
         esp_timer_get_time() + ((int64_t)CAMERA_SETTLE_TIMEOUT_MS * 1000LL);
     err = camera_settle_stream_locked(settle_deadline_us);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Stream settle failed during open (err=0x%x)", err);
-        camera_close_locked();
-        return err;
+        /* Do NOT tear the device down here. This esp_video DVP driver
+         * de-registers /dev/videoN when the last fd closes, after which every
+         * subsequent open() fails with ENOENT until reboot. A settle miss at
+         * open (sensor still warming up, a transient dequeue timeout) is
+         * recoverable: keep the stream open and let the first capture() re-run
+         * settle. */
+        ESP_LOGW(TAG, "Stream did not settle during open (err=0x%x); keeping device open, will settle on capture", err);
     }
 
     return ESP_OK;
@@ -606,13 +610,15 @@ static esp_err_t camera_settle_stream_locked(int64_t deadline_us)
 
         err = camera_dequeue_buffer_locked(remaining_ms, &buffer);
         if (err != ESP_OK) {
-            camera_close_or_defer_locked("settle dequeue failed");
+            /* Transient miss during warm-up — return the error but keep the
+             * device open. Closing here de-registers /dev/videoN (ENOENT on
+             * every future open until reboot); the caller can simply retry. */
             return err;
         }
 
         err = camera_validate_buffer_locked(&buffer, &frame_bytes);
         if (camera_requeue_buffer_locked(&buffer) != ESP_OK) {
-            camera_close_or_defer_locked("settle requeue failed");
+            /* Same rationale: do not de-register on a requeue miss. */
             return ESP_FAIL;
         }
 
