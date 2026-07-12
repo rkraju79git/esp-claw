@@ -68,7 +68,7 @@ idf_component_register(
 # camera Lua module is enabled, and config-conditional REQUIRES do not work
 # (requirements are resolved before CONFIG_* is available). optional_requires
 # links them when present and is skipped otherwise — the source is config-gated.
-idf_component_optional_requires(PRIVATE lua_module_camera esp_board_manager)
+idf_component_optional_requires(PRIVATE lua_module_camera espressif__esp_board_manager)
 
 # Rebuild the component whenever the bundled UI asset changes on disk.
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${FRONTEND_DIST_HTML_GZ}")
