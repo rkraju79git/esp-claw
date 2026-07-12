@@ -88,6 +88,10 @@ Mode B ships as a ready-made board profile: **`oceanlabz_s3cam`** (under
 enables the voice channel on the relocated pins, and leaves audio to
 `cap_im_voice` (no board-manager I2S, so no pin clash).
 
+> **Requires ESP-IDF v5.5** (v5.5.4 recommended). ESP-Claw does not build on
+> v5.3.x — the component manager drops capability components whose Kconfig
+> rules it can't evaluate, producing missing-header errors in `app_claw.c`.
+
 Run each line separately (no inline `#` comments — zsh/idf.py will try to
 execute them):
 
