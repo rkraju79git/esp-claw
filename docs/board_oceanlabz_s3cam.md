@@ -88,12 +88,25 @@ Mode B ships as a ready-made board profile: **`oceanlabz_s3cam`** (under
 enables the voice channel on the relocated pins, and leaves audio to
 `cap_im_voice` (no board-manager I2S, so no pin clash).
 
+Run each line separately (no inline `#` comments — zsh/idf.py will try to
+execute them):
+
 ```bash
 cd application/edge_agent
+pip install esp-bmgr-assist          # once per ESP-IDF env; registers `idf.py bmgr`
 idf.py set-target esp32s3
-idf.py gen-bmgr-config -c ./boards -b oceanlabz_s3cam
-idf.py menuconfig    # Voice IM Channel -> set your OpenAI API key
+idf.py bmgr -c ./boards -b oceanlabz_s3cam
+idf.py menuconfig                    # Voice IM Channel -> set your OpenAI API key
 idf.py build flash monitor
+```
+
+If `idf.py bmgr` still reports "Execute targets that are not explicitly known"
+(the helper didn't register), generate the board config directly instead — no
+helper needed:
+
+```bash
+python managed_components/espressif__esp_board_manager/gen_bmgr_config_codes.py \
+    -b ./boards/community/oceanlabz_s3cam -c ./boards --project-dir .
 ```
 
 ### Testing the camera
