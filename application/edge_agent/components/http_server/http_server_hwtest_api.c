@@ -535,18 +535,20 @@ static esp_err_t hwtest_camera_handler(httpd_req_t *req)
         httpd_resp_set_status(req, "503 Service Unavailable");
         return hwtest_reply_error(req, "camera device not found");
     }
-    if (camera_is_open()) {
-        httpd_resp_set_status(req, "409 Conflict");
-        return hwtest_reply_error(req, "camera busy (in use by a skill)");
-    }
 
-    /* Open with the driver default format (YUV422). Requesting JPEG here makes
-     * the OV3660 DVP driver block ~30s in stream-settle and then fail, because
-     * JPEG is not configured in this board's sdkconfig. */
-    esp_err_t err = camera_open(dev_path, NULL);
-    if (err != ESP_OK) {
-        return hwtest_reply_error(req, esp_err_to_name(err));
+    /* Open once and keep it open across requests. This DVP driver re-initializes
+     * the whole camera controller on every open and de-registers the video
+     * device on close, so an open/close per capture fails the second time
+     * ("Failed to open /dev/video2, errno=2"). Requesting JPEG here also makes
+     * it block ~30s in stream-settle and fail (JPEG not configured), so open
+     * with the driver default format (YUV422). */
+    if (!camera_is_open()) {
+        esp_err_t open_err = camera_open(dev_path, NULL);
+        if (open_err != ESP_OK) {
+            return hwtest_reply_error(req, esp_err_to_name(open_err));
+        }
     }
+    esp_err_t err;
 
     /* Discard one frame so exposure/gain settle, keep the next. */
     uint8_t *frame = NULL;
@@ -559,7 +561,9 @@ static esp_err_t hwtest_camera_handler(httpd_req_t *req)
         }
         err = camera_capture_frame(1500, &frame, &frame_bytes, &info);
         if (err != ESP_OK) {
-            camera_close();
+            /* Leave the device open — closing de-registers /dev/videoN and the
+             * next request fails with errno=2. A transient capture error is
+             * recoverable on the next poll. */
             return hwtest_reply_error(req, esp_err_to_name(err));
         }
     }
@@ -593,7 +597,8 @@ static esp_err_t hwtest_camera_handler(httpd_req_t *req)
     }
 
     camera_release_frame(frame);
-    camera_close();
+    /* Intentionally do NOT camera_close() — keep the DVP device open so the
+     * next capture reuses it. See the open-once note above. */
     return send_err;
 }
 
