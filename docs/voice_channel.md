@@ -26,9 +26,16 @@ Tested target: ESP32-S3 (≥8 MB flash / 8 MB PSRAM) with:
 
 ## Build
 
+⚠️ **Use the plain `esp32_S3_DevKitC_1` board profile — not `_breadboard`.**
+The breadboard profile configures an ST7789 SPI display, PDM speaker, and
+backlight on GPIO 4, 5, 6, 7, 9, 15 and 16 — colliding with every default
+audio pin below. The plain profile uses only GPIO 38 (onboard RGB LED) and
+conflicts with nothing.
+
 ```bash
 cd application/edge_agent
 idf.py set-target esp32s3
+idf.py bmgr -c ./boards -b esp32_S3_DevKitC_1
 idf.py menuconfig
 ```
 
@@ -54,3 +61,18 @@ Then `idf.py build flash monitor`.
   not the runtime settings store. Wake-word (esp-sr) and on-device VAD are
   natural follow-ups — PTT keeps v1 simple and false-trigger-free.
 - Long agent replies are spoken in full; there is no barge-in yet.
+- The Web IM UI shows only channel `"web"` conversations; voice exchanges
+  (channel `"voice"`) do not appear there. Watch `idf.py monitor` to see
+  transcripts and replies logged.
+
+## GPIO budget (plain DevKitC_1 profile)
+
+| GPIO | Used by |
+|---|---|
+| 0 | Push-to-talk (BOOT button) |
+| 4, 5, 6 | INMP441 mic (SCK, WS, SD) |
+| 15, 16, 7 | MAX98357A amp (BCLK, LRC, DIN) |
+| 38 | Board profile: onboard RGB LED (RMT) — do not reuse |
+| 35, 36, 37 | Reserved by octal PSRAM — never usable |
+| 3, 45, 46 | Strapping pins — avoid |
+| 21, 47, 41, 42, 39, 40, 1, 2, 8, 10–14, 17, 18 | Free for skills (motors, sensors, ...) |
