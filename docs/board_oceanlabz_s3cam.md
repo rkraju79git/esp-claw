@@ -91,7 +91,7 @@ enables the voice channel on the relocated pins, and leaves audio to
 ```bash
 cd application/edge_agent
 idf.py set-target esp32s3
-idf.py bmgr -c ./boards -b oceanlabz_s3cam
+idf.py gen-bmgr-config -c ./boards -b oceanlabz_s3cam
 idf.py menuconfig    # Voice IM Channel -> set your OpenAI API key
 idf.py build flash monitor
 ```

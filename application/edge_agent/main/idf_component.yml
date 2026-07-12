@@ -30,6 +30,9 @@ dependencies:
   http_server:
     path: ../components/http_server
 
+  cap_im_voice:
+    path: ../../../components/claw_capabilities/cap_im_voice
+
   settings:
     path: ../../../components/common/settings
 
