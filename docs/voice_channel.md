@@ -61,9 +61,41 @@ Then `idf.py build flash monitor`.
   not the runtime settings store. Wake-word (esp-sr) and on-device VAD are
   natural follow-ups — PTT keeps v1 simple and false-trigger-free.
 - Long agent replies are spoken in full; there is no barge-in yet.
-- The Web IM UI shows only channel `"web"` conversations; voice exchanges
-  (channel `"voice"`) do not appear there. Watch `idf.py monitor` to see
-  transcripts and replies logged.
+- The Web IM UI shows only channel `"web"` conversations. Voice exchanges have
+  their own live log page — see below.
+
+## Built-in web pages
+
+Both pages are embedded in the firmware (no frontend toolchain needed) and are
+served from the device — open `http://<device-ip>/...`:
+
+### `/voice` — live voice pipeline log
+
+Streams every stage over the existing `/ws/webim` WebSocket:
+`recording_start` → `recording_stop` (duration) → `transcribing` →
+`transcript` (what Whisper heard) → `reply` (what the agent said) →
+`speaking_start` / `speaking_end`, plus `error` events. History survives page
+reloads via `GET /api/voice/events` (last 32 events).
+
+### `/hwtest` — hardware test bench
+
+Functional tests for every kit peripheral; pins are entered on the page, so
+hardware can be verified before it is wired into any firmware feature:
+
+| Test | What it actually does |
+|---|---|
+| System | Uptime, internal heap + PSRAM free, voice pin config |
+| I2C scan | Probes 0x08–0x77 on any SDA/SCL pins (finds OLED @0x3C, sensors) |
+| OLED | Initializes an SSD1306 over raw I2C and draws a checkerboard |
+| Mic | Records N seconds, reports peak level + cloud Whisper transcript |
+| Speaker | Sine test tone (freq/duration) or spoken TTS phrase |
+| Motors | Fwd/Rev/Left/Right/Stop on any 4 driver pins, firmware auto-stop |
+| Ultrasonic | HC-SR04 trigger/echo pulse timing → distance in cm |
+| Raw GPIO | Set any safe pin high/low or read it (blocked: USB/flash/PSRAM pins) |
+
+Camera capture is not in the bench yet: the OceanLabz camera's DVP pin mapping
+is board-specific and must be added as a board profile before esp_video can
+drive it. The I2C scan will still detect the camera's SCCB interface.
 
 ## GPIO budget (plain DevKitC_1 profile)
 

@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ESP-Claw Voice Log</title>
+<style>
+  body { margin:0; font:14px/1.5 ui-monospace,Menlo,Consolas,monospace;
+         background:#0d1117; color:#c9d1d9; }
+  header { padding:10px 16px; background:#161b22; border-bottom:1px solid #30363d;
+           display:flex; align-items:center; gap:12px; }
+  h1 { font-size:15px; margin:0; color:#e6edf3; }
+  #state { padding:2px 10px; border-radius:10px; background:#21262d; font-size:12px; }
+  #state.live { background:#1a7f37; color:#fff; }
+  #log { padding:10px 16px; }
+  .row { display:flex; gap:10px; padding:3px 0; border-bottom:1px solid #161b22; }
+  .ts { color:#484f58; min-width:80px; }
+  .ev { min-width:120px; font-weight:600; }
+  .ev-recording_start, .ev-recording_stop { color:#d29922; }
+  .ev-transcribing { color:#8b949e; }
+  .ev-transcript { color:#58a6ff; }
+  .ev-reply { color:#3fb950; }
+  .ev-speaking_start, .ev-speaking_end { color:#bc8cff; }
+  .ev-error { color:#f85149; }
+  .detail { white-space:pre-wrap; word-break:break-word; }
+  a { color:#58a6ff; }
+</style>
+</head>
+<body>
+<header>
+  <h1>&#127908; Voice Channel Log</h1>
+  <span id="state">connecting…</span>
+  <span style="margin-left:auto"><a href="/hwtest">hardware test bench &rarr;</a></span>
+</header>
+<div id="log"></div>
+<script>
+const log = document.getElementById('log');
+const state = document.getElementById('state');
+
+function fmt(ms) {
+  const s = Math.floor(ms / 1000);
+  const pad = n => String(n).padStart(2, '0');
+  return pad(Math.floor(s/3600)) + ':' + pad(Math.floor(s/60)%60) + ':' + pad(s%60);
+}
+function add(e) {
+  const row = document.createElement('div');
+  row.className = 'row';
+  row.innerHTML = '<span class="ts">' + fmt(e.ts) + '</span>' +
+    '<span class="ev ev-' + e.event + '">' + e.event + '</span>' +
+    '<span class="detail"></span>';
+  row.querySelector('.detail').textContent = e.detail || '';
+  log.appendChild(row);
+  window.scrollTo(0, document.body.scrollHeight);
+}
+fetch('/api/voice/events').then(r => r.json())
+  .then(d => (d.events || []).forEach(add)).catch(() => {});
+
+let ws;
+function connect() {
+  ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') +
+                     location.host + '/ws/webim');
+  ws.onopen = () => { state.textContent = 'live'; state.className = 'live'; };
+  ws.onmessage = ev => {
+    try {
+      const m = JSON.parse(ev.data);
+      if (m.type === 'voice_event') add(m);
+    } catch (e) {}
+  };
+  ws.onclose = () => {
+    state.textContent = 'reconnecting…'; state.className = '';
+    setTimeout(connect, 2000);
+  };
+}
+connect();
+</script>
+</body>
+</html>

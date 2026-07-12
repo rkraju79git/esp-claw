@@ -15,11 +15,16 @@
  */
 #include "cap_im_voice.h"
 
+#include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 #include "cJSON.h"
 #include "driver/gpio.h"
@@ -58,6 +63,17 @@ static QueueHandle_t s_tts_queue; /* char* items, heap-owned */
 static int16_t *s_record_buf;     /* PSRAM, max utterance */
 static size_t s_record_capacity;  /* in samples */
 static volatile bool s_recording;
+static cap_im_voice_event_cb_t s_event_cb;
+static void *s_event_cb_ctx;
+
+static void voice_emit_event(const char *event, const char *detail)
+{
+    cap_im_voice_event_cb_t cb = s_event_cb;
+
+    if (cb) {
+        cb(event, detail, s_event_cb_ctx);
+    }
+}
 
 /* ------------------------------------------------------------------ I2S -- */
 
@@ -331,7 +347,9 @@ static void voice_tts_task(void *arg)
             if (text) {
                 ESP_LOGI(TAG, "speaking: %.80s%s", text,
                          strlen(text) > 80 ? "..." : "");
+                voice_emit_event("speaking_start", NULL);
                 voice_speak(text);
+                voice_emit_event("speaking_end", NULL);
                 free(text);
             }
         }
@@ -358,15 +376,21 @@ static void voice_ptt_task(void *arg)
             ESP_LOGI(TAG, "recording...");
             n_samples = 0;
             s_recording = true;
+            voice_emit_event("recording_start", NULL);
         } else if (!pressed && s_recording) {
             s_recording = false;
             /* Ignore accidental taps shorter than 300 ms. */
             if (n_samples >= VOICE_MIC_SAMPLE_RATE * 3 / 10) {
-                ESP_LOGI(TAG, "transcribing %.1f s...",
+                char seconds[16];
+                snprintf(seconds, sizeof(seconds), "%.1f s",
                          (float)n_samples / VOICE_MIC_SAMPLE_RATE);
+                ESP_LOGI(TAG, "transcribing %s...", seconds);
+                voice_emit_event("recording_stop", seconds);
+                voice_emit_event("transcribing", NULL);
                 char *transcript = voice_transcribe(s_record_buf, n_samples);
                 if (transcript) {
                     ESP_LOGI(TAG, "user: %s", transcript);
+                    voice_emit_event("transcript", transcript);
                     esp_err_t err = cap_im_local_emit_text(CAP_IM_VOICE_CHANNEL,
                                                            VOICE_CHAT_ID,
                                                            VOICE_SENDER_ID,
@@ -374,11 +398,15 @@ static void voice_ptt_task(void *arg)
                                                            transcript);
                     if (err != ESP_OK) {
                         ESP_LOGE(TAG, "emit failed: %s", esp_err_to_name(err));
+                        voice_emit_event("error", esp_err_to_name(err));
                     }
                     free(transcript);
                 } else {
                     ESP_LOGW(TAG, "transcription failed or empty");
+                    voice_emit_event("error", "transcription failed or empty");
                 }
+            } else {
+                voice_emit_event("recording_stop", "too short, ignored");
             }
         }
 
@@ -411,6 +439,8 @@ esp_err_t cap_im_voice_handle_outbound(const cap_im_local_message_t *message)
     if (!s_tts_queue) {
         return ESP_ERR_INVALID_STATE;
     }
+
+    voice_emit_event("reply", message->text);
 
     char *copy = strdup(message->text);
     if (!copy) {
@@ -450,6 +480,112 @@ esp_err_t cap_im_voice_start(void)
     return ESP_OK;
 }
 
+esp_err_t cap_im_voice_set_event_callback(cap_im_voice_event_cb_t cb,
+                                          void *user_ctx)
+{
+    s_event_cb_ctx = user_ctx;
+    s_event_cb = cb;
+    return ESP_OK;
+}
+
+esp_err_t cap_im_voice_say(const char *text)
+{
+    if (!text || !text[0]) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_tts_queue) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    char *copy = strdup(text);
+    if (!copy) {
+        return ESP_ERR_NO_MEM;
+    }
+    if (xQueueSend(s_tts_queue, &copy, pdMS_TO_TICKS(100)) != pdTRUE) {
+        free(copy);
+        return ESP_ERR_TIMEOUT;
+    }
+    return ESP_OK;
+}
+
+esp_err_t cap_im_voice_test_mic(int seconds,
+                                char *transcript,
+                                size_t transcript_size,
+                                int *peak_out)
+{
+    if (seconds < 1 || seconds > 10 || !transcript || !peak_out) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_record_buf || s_recording) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    size_t want = (size_t)VOICE_MIC_SAMPLE_RATE * seconds;
+    if (want > s_record_capacity) {
+        want = s_record_capacity;
+    }
+
+    s_recording = true; /* keep the PTT task off the mic */
+    size_t n = 0;
+    while (n < want) {
+        int r = voice_mic_read(s_record_buf + n,
+                               want - n > VOICE_MIC_CHUNK_SAMPLES
+                                   ? VOICE_MIC_CHUNK_SAMPLES
+                                   : want - n);
+        if (r < 0) {
+            s_recording = false;
+            return ESP_FAIL;
+        }
+        n += r;
+    }
+    s_recording = false;
+
+    int peak = 0;
+    for (size_t i = 0; i < n; i++) {
+        int v = s_record_buf[i] < 0 ? -s_record_buf[i] : s_record_buf[i];
+        if (v > peak) {
+            peak = v;
+        }
+    }
+    *peak_out = peak;
+
+    transcript[0] = '\0';
+    char *text = voice_transcribe(s_record_buf, n);
+    if (text) {
+        strlcpy(transcript, text, transcript_size);
+        free(text);
+    }
+    return ESP_OK;
+}
+
+esp_err_t cap_im_voice_test_tone(int freq_hz, int duration_ms)
+{
+    if (freq_hz < 50 || freq_hz > 8000 || duration_ms < 50 ||
+        duration_ms > 5000) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_tx_chan) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    enum { CHUNK = 512 };
+    int16_t chunk[CHUNK];
+    size_t total = (size_t)VOICE_TTS_SAMPLE_RATE * duration_ms / 1000;
+    float step = 2.0f * (float)M_PI * freq_hz / VOICE_TTS_SAMPLE_RATE;
+    float phase = 0;
+
+    for (size_t done = 0; done < total; done += CHUNK) {
+        size_t count = total - done > CHUNK ? CHUNK : total - done;
+        for (size_t i = 0; i < count; i++) {
+            chunk[i] = (int16_t)(10000.0f * sinf(phase));
+            phase += step;
+        }
+        size_t written = 0;
+        i2s_channel_write(s_tx_chan, chunk, count * sizeof(int16_t), &written,
+                          portMAX_DELAY);
+    }
+    return ESP_OK;
+}
+
 #else /* !CONFIG_APP_CLAW_CAP_IM_VOICE */
 
 esp_err_t cap_im_voice_start(void)
@@ -461,6 +597,37 @@ esp_err_t cap_im_voice_handle_outbound(const cap_im_local_message_t *message)
 {
     (void)message;
     return ESP_OK;
+}
+
+esp_err_t cap_im_voice_set_event_callback(cap_im_voice_event_cb_t cb,
+                                          void *user_ctx)
+{
+    (void)cb;
+    (void)user_ctx;
+    return ESP_OK;
+}
+
+esp_err_t cap_im_voice_say(const char *text)
+{
+    (void)text;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+esp_err_t cap_im_voice_test_mic(int seconds, char *transcript,
+                                size_t transcript_size, int *peak_out)
+{
+    (void)seconds;
+    (void)transcript;
+    (void)transcript_size;
+    (void)peak_out;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+esp_err_t cap_im_voice_test_tone(int freq_hz, int duration_ms)
+{
+    (void)freq_hz;
+    (void)duration_ms;
+    return ESP_ERR_NOT_SUPPORTED;
 }
 
 #endif /* CONFIG_APP_CLAW_CAP_IM_VOICE */

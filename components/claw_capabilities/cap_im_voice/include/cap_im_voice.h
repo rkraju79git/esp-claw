@@ -16,6 +16,36 @@ extern "C" {
 #define CAP_IM_VOICE_CHANNEL "voice"
 
 /*
+ * Voice pipeline observability. Events:
+ *   "recording_start", "recording_stop" (detail: "3.2 s"), "transcribing",
+ *   "transcript" (detail: user text), "reply" (detail: agent text),
+ *   "speaking_start", "speaking_end", "error" (detail: description)
+ */
+typedef void (*cap_im_voice_event_cb_t)(const char *event,
+                                        const char *detail,
+                                        void *user_ctx);
+
+/* Register an observer for voice pipeline events (single observer). May be
+ * called before or after cap_im_voice_start(). */
+esp_err_t cap_im_voice_set_event_callback(cap_im_voice_event_cb_t cb,
+                                          void *user_ctx);
+
+/* --- Hardware test hooks (used by the /hwtest bench) ------------------- */
+
+/* Speak arbitrary text through the TTS pipeline. */
+esp_err_t cap_im_voice_say(const char *text);
+
+/* Record `seconds` (1..10) from the mic, report the peak sample level
+ * (0..32767) and the cloud transcription. */
+esp_err_t cap_im_voice_test_mic(int seconds,
+                                char *transcript,
+                                size_t transcript_size,
+                                int *peak_out);
+
+/* Play a sine test tone on the speaker. */
+esp_err_t cap_im_voice_test_tone(int freq_hz, int duration_ms);
+
+/*
  * Initialize I2S mic/speaker, start the push-to-talk and TTS playback tasks.
  * Call after app_claw_start() so the local IM gateway is available.
  */

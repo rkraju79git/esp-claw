@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ESP-Claw Hardware Test Bench</title>
+<style>
+  body { margin:0; font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;
+         background:#0d1117; color:#c9d1d9; }
+  header { padding:10px 16px; background:#161b22; border-bottom:1px solid #30363d; }
+  h1 { font-size:16px; margin:0; color:#e6edf3; }
+  main { max-width:760px; margin:0 auto; padding:12px; }
+  section { background:#161b22; border:1px solid #30363d; border-radius:8px;
+            margin:12px 0; padding:12px 16px; }
+  h2 { font-size:14px; margin:0 0 8px; color:#e6edf3; }
+  label { font-size:12px; color:#8b949e; margin-right:4px; }
+  input, select { width:64px; background:#0d1117; color:#c9d1d9;
+          border:1px solid #30363d; border-radius:4px; padding:4px 6px; }
+  input.wide { width:220px; }
+  button { background:#238636; color:#fff; border:0; border-radius:6px;
+           padding:6px 14px; margin:4px 4px 4px 0; cursor:pointer; font-size:13px; }
+  button:hover { background:#2ea043; }
+  button.warn { background:#9e6a03; }
+  button:disabled { background:#30363d; cursor:wait; }
+  .out { font:12px ui-monospace,Menlo,monospace; background:#0d1117;
+         border-radius:6px; padding:8px 10px; margin-top:8px; min-height:18px;
+         white-space:pre-wrap; word-break:break-word; color:#8b949e; }
+  .ok { color:#3fb950; } .err { color:#f85149; }
+  .pad { display:grid; grid-template-columns:repeat(3,64px); gap:6px;
+         justify-content:start; margin-top:6px; }
+  .pad button { margin:0; }
+  a { color:#58a6ff; }
+</style>
+</head>
+<body>
+<header><h1>&#128295; Hardware Test Bench
+  <span style="float:right;font-size:12px"><a href="/voice">voice log &rarr;</a></span></h1>
+</header>
+<main>
+
+<section>
+  <h2>System</h2>
+  <button onclick="run(this,'info')">Refresh</button>
+  <div class="out" id="out-info"></div>
+</section>
+
+<section>
+  <h2>I2C bus scan <small>(finds OLED @0x3C, sensors, camera SCCB)</small></h2>
+  <label>SDA</label><input id="i2c-sda" value="2">
+  <label>SCL</label><input id="i2c-scl" value="1">
+  <button onclick="run(this,'i2cscan')">Scan</button>
+  <div class="out" id="out-i2cscan"></div>
+</section>
+
+<section>
+  <h2>OLED display (SSD1306)</h2>
+  <label>SDA</label><input id="oled-sda" value="2">
+  <label>SCL</label><input id="oled-scl" value="1">
+  <label>Addr</label><input id="oled-addr" value="0x3C">
+  <button onclick="run(this,'oled')">Draw test pattern</button>
+  <div class="out" id="out-oled"></div>
+</section>
+
+<section>
+  <h2>Microphone (INMP441) + cloud speech-to-text</h2>
+  <label>Seconds</label><input id="mic-sec" value="3">
+  <button onclick="run(this,'mic')">Record &amp; transcribe</button>
+  <div class="out" id="out-mic"></div>
+</section>
+
+<section>
+  <h2>Speaker (MAX98357A)</h2>
+  <label>Freq Hz</label><input id="spk-freq" value="440">
+  <label>ms</label><input id="spk-ms" value="1000">
+  <button onclick="run(this,'tone')">Play tone</button>
+  <br>
+  <label>Say</label><input class="wide" id="spk-text" value="Hardware test successful">
+  <button onclick="run(this,'tts')">Speak (TTS)</button>
+  <div class="out" id="out-speaker"></div>
+</section>
+
+<section>
+  <h2>Motors (L298N / TB6612)</h2>
+  <label>IN1</label><input id="m-in1" value="21">
+  <label>IN2</label><input id="m-in2" value="47">
+  <label>IN3</label><input id="m-in3" value="41">
+  <label>IN4</label><input id="m-in4" value="42">
+  <label>ms</label><input id="m-ms" value="800">
+  <div class="pad">
+    <span></span><button onclick="motor(this,1,1)">&#9650; Fwd</button><span></span>
+    <button onclick="motor(this,-1,1)">&#8634; Left</button>
+    <button class="warn" onclick="motor(this,0,0)">STOP</button>
+    <button onclick="motor(this,1,-1)">&#8635; Right</button>
+    <span></span><button onclick="motor(this,-1,-1)">&#9660; Rev</button><span></span>
+  </div>
+  <div class="out" id="out-motor">Auto-stops after "ms". Wheels off the ground for first test!</div>
+</section>
+
+<section>
+  <h2>Ultrasonic distance (HC-SR04)</h2>
+  <label>TRIG</label><input id="us-trig" value="17">
+  <label>ECHO</label><input id="us-echo" value="18">
+  <button onclick="run(this,'ultrasonic')">Measure</button>
+  <div class="out" id="out-ultrasonic"></div>
+</section>
+
+<section>
+  <h2>Raw GPIO</h2>
+  <label>Pin</label><input id="g-pin" value="48">
+  <select id="g-mode"><option value="out">out</option><option value="in">in</option></select>
+  <label>Level</label><select id="g-level"><option>1</option><option>0</option></select>
+  <button onclick="run(this,'gpio')">Apply / Read</button>
+  <div class="out" id="out-gpio">Blocked: 19,20 (USB), 26-37 (flash/PSRAM). Careful: 0,3,45,46 (strapping).</div>
+</section>
+
+</main>
+<script>
+const V = id => document.getElementById(id).value.trim();
+const N = id => parseInt(V(id), 0);
+
+function show(id, data, isErr) {
+  const el = document.getElementById('out-' + id);
+  el.textContent = typeof data === 'string' ? data : JSON.stringify(data, null, 1);
+  el.className = 'out ' + (isErr ? 'err' : 'ok');
+}
+async function call(id, method, url, body) {
+  try {
+    const r = await fetch(url, body ? { method:'POST', body: JSON.stringify(body) }
+                                    : undefined);
+    const d = await r.json();
+    show(id, d, d.ok === false);
+  } catch (e) { show(id, String(e), true); }
+}
+async function run(btn, what) {
+  btn.disabled = true;
+  try {
+    if (what === 'info')     await call('info', 'GET', '/api/hwtest/info');
+    if (what === 'i2cscan')  await call('i2cscan', 'GET',
+        '/api/hwtest/i2cscan?sda=' + N('i2c-sda') + '&scl=' + N('i2c-scl'));
+    if (what === 'oled')     await call('oled', 'POST', '/api/hwtest/oled',
+        { sda:N('oled-sda'), scl:N('oled-scl'), addr:N('oled-addr') });
+    if (what === 'mic')      await call('mic', 'POST', '/api/hwtest/mic',
+        { seconds:N('mic-sec') });
+    if (what === 'tone')     await call('speaker', 'POST', '/api/hwtest/speaker',
+        { type:'tone', freq:N('spk-freq'), ms:N('spk-ms') });
+    if (what === 'tts')      await call('speaker', 'POST', '/api/hwtest/speaker',
+        { type:'tts', text:V('spk-text') });
+    if (what === 'ultrasonic') await call('ultrasonic', 'POST',
+        '/api/hwtest/ultrasonic', { trig:N('us-trig'), echo:N('us-echo') });
+    if (what === 'gpio')     await call('gpio', 'POST', '/api/hwtest/gpio',
+        { pin:N('g-pin'), mode:V('g-mode'), level:N('g-level') });
+  } finally { btn.disabled = false; }
+}
+async function motor(btn, left, right) {
+  btn.disabled = true;
+  try {
+    await call('motor', 'POST', '/api/hwtest/motor', {
+      in1:N('m-in1'), in2:N('m-in2'), in3:N('m-in3'), in4:N('m-in4'),
+      left:left, right:right, ms:N('m-ms') });
+  } finally { btn.disabled = false; }
+}
+run(document.querySelector('button'), 'info');
+</script>
+</body>
+</html>

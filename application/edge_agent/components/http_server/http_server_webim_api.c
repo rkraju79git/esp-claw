@@ -149,7 +149,7 @@ void http_server_webim_ws_fd_remove(int fd)
     webim_ws_fd_remove(fd);
 }
 
-static void webim_ws_broadcast_json(const char *json)
+void webim_ws_broadcast_json(const char *json)
 {
     int local_fds[WEBIM_WS_MAX_CLIENTS];
     size_t local_count = 0;

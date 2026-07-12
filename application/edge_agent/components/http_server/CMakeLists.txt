@@ -22,9 +22,14 @@ set(http_server_srcs
     "http_server_files_api.c"
     "http_server_wechat_api.c"
     "http_server_webim_api.c"
+    "http_server_hwtest_api.c"
     "http_server_json.c"
     "http_server_utils.c"
 )
+
+if(CONFIG_APP_CLAW_CAP_IM_VOICE)
+    list(APPEND http_server_srcs "http_server_voice_api.c")
+endif()
 
 set(http_server_requires
     app_config
@@ -33,6 +38,9 @@ set(http_server_requires
     cap_im_voice
     claw_cap
     esp_http_server
+    esp_driver_i2c
+    esp_driver_gpio
+    esp_timer
     heap
 )
 
@@ -49,6 +57,8 @@ idf_component_register(
     EMBED_FILES
         "${FRONTEND_DIST_HTML_GZ}"
         "${FRONTEND_PUBLIC_FAVICON_ICO}"
+        "pages/voice_log.html"
+        "pages/hwtest.html"
     REQUIRES
         ${http_server_requires}
 )
