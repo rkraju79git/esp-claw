@@ -510,6 +510,23 @@ static uint8_t *hwtest_yuyv_to_bmp(const uint8_t *yuyv, uint32_t sw, uint32_t sh
     return bmp;
 }
 
+/* Send a large body in small pieces. httpd_resp_send() pushes the whole buffer
+ * in one write, which returns EAGAIN and aborts when the socket buffer fills;
+ * chunked writes let TCP drain between pieces. */
+static esp_err_t hwtest_send_in_chunks(httpd_req_t *req, const uint8_t *data,
+                                       size_t len)
+{
+    const size_t chunk = 4096;
+    for (size_t off = 0; off < len; off += chunk) {
+        size_t n = (len - off < chunk) ? (len - off) : chunk;
+        esp_err_t err = httpd_resp_send_chunk(req, (const char *)data + off, n);
+        if (err != ESP_OK) {
+            return err;
+        }
+    }
+    return httpd_resp_send_chunk(req, NULL, 0); /* terminate the response */
+}
+
 static esp_err_t hwtest_camera_handler(httpd_req_t *req)
 {
     const char *dev_path = hwtest_camera_dev_path();
@@ -523,26 +540,24 @@ static esp_err_t hwtest_camera_handler(httpd_req_t *req)
         return hwtest_reply_error(req, "camera busy (in use by a skill)");
     }
 
-    /* Prefer JPEG; fall back to the driver default (YUV422). */
-    camera_open_opts_t opts = { .pixel_format = HWTEST_FOURCC_JPEG };
-    esp_err_t err = camera_open(dev_path, &opts);
-    if (err != ESP_OK) {
-        err = camera_open(dev_path, NULL);
-    }
+    /* Open with the driver default format (YUV422). Requesting JPEG here makes
+     * the OV3660 DVP driver block ~30s in stream-settle and then fail, because
+     * JPEG is not configured in this board's sdkconfig. */
+    esp_err_t err = camera_open(dev_path, NULL);
     if (err != ESP_OK) {
         return hwtest_reply_error(req, esp_err_to_name(err));
     }
 
-    /* Discard a couple of frames so exposure/gain settle. */
+    /* Discard one frame so exposure/gain settle, keep the next. */
     uint8_t *frame = NULL;
     size_t frame_bytes = 0;
     camera_frame_info_t info = {0};
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 2; i++) {
         if (frame) {
             camera_release_frame(frame);
             frame = NULL;
         }
-        err = camera_capture_frame(1000, &frame, &frame_bytes, &info);
+        err = camera_capture_frame(1500, &frame, &frame_bytes, &info);
         if (err != ESP_OK) {
             camera_close();
             return hwtest_reply_error(req, esp_err_to_name(err));
@@ -553,7 +568,7 @@ static esp_err_t hwtest_camera_handler(httpd_req_t *req)
     if (info.pixel_format == HWTEST_FOURCC_JPEG ||
         strcmp(info.pixel_format_str, "JPEG") == 0) {
         httpd_resp_set_type(req, "image/jpeg");
-        send_err = httpd_resp_send(req, (const char *)frame, frame_bytes);
+        send_err = hwtest_send_in_chunks(req, frame, frame_bytes);
     } else if (frame_bytes >= (size_t)info.width * info.height * 2 &&
                info.width && info.height) {
         size_t bmp_size = 0;
@@ -561,7 +576,9 @@ static esp_err_t hwtest_camera_handler(httpd_req_t *req)
                                           &bmp_size);
         if (bmp) {
             httpd_resp_set_type(req, "image/bmp");
-            send_err = httpd_resp_send(req, (const char *)bmp, bmp_size);
+            /* Large payload: send in chunks so a full socket buffer doesn't
+             * abort the whole response with EAGAIN. */
+            send_err = hwtest_send_in_chunks(req, bmp, bmp_size);
             free(bmp);
         } else {
             send_err = hwtest_reply_error(req, "preview alloc failed");
