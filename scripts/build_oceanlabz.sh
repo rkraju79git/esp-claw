@@ -29,7 +29,32 @@ PROJECT_DIR="$SCRIPT_DIR/../application/edge_agent"
 
 echo "==> Step 1/7: leaving any active Python venv / stale ESP-IDF env"
 deactivate 2>/dev/null || true
-unset VIRTUAL_ENV IDF_PYTHON_ENV_PATH 2>/dev/null || true
+# Unsetting VIRTUAL_ENV is not enough: a previously-sourced export.sh leaves the
+# ESP-IDF python venv's bin on PATH, so `python3` still resolves to a venv and
+# install.sh refuses ("called from a virtual environment"). Strip those dirs.
+_clean_path=""
+_old_ifs="$IFS"; IFS=':'
+for _p in $PATH; do
+    case "$_p" in
+        *".espressif/python_env/"*) continue ;;              # ESP-IDF python venvs
+        "${VIRTUAL_ENV:-/__none__}/bin") continue ;;          # any active venv
+        *) _clean_path="${_clean_path:+$_clean_path:}$_p" ;;
+    esac
+done
+IFS="$_old_ifs"
+export PATH="$_clean_path"
+unset VIRTUAL_ENV IDF_PYTHON_ENV_PATH PYTHONHOME PYTHONPATH 2>/dev/null || true
+hash -r 2>/dev/null || true
+
+# Verify python3 is now a real (non-venv) interpreter before continuing.
+if ! python3 -c 'import sys; sys.exit(0 if sys.prefix == sys.base_prefix else 1)' 2>/dev/null; then
+    echo "ERROR: python3 is still a virtual environment after cleaning PATH." >&2
+    echo "       Open a brand-new Terminal tab and run this script there, or run:" >&2
+    echo "         conda deactivate 2>/dev/null; deactivate 2>/dev/null" >&2
+    echo "       then retry." >&2
+    exit 1
+fi
+echo "    using python3: $(command -v python3)"
 
 echo "==> Step 2/7: ensuring ESP-IDF $IDF_TAG at $IDF_DIR"
 if [ ! -f "$IDF_DIR/export.sh" ]; then
