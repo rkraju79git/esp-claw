@@ -15,6 +15,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 
 #include "cap_im_voice.h"
 #include "driver/gpio.h"
@@ -516,6 +517,15 @@ static uint8_t *hwtest_yuyv_to_bmp(const uint8_t *yuyv, uint32_t sw, uint32_t sh
 static esp_err_t hwtest_send_in_chunks(httpd_req_t *req, const uint8_t *data,
                                        size_t len)
 {
+    /* Make send() block for buffer space instead of failing immediately with
+     * EAGAIN (errno 11). Without this the ~300 KB image aborts mid-transfer on
+     * a slow client and the browser hangs on a half-finished response. */
+    int sockfd = httpd_req_to_sockfd(req);
+    if (sockfd >= 0) {
+        struct timeval snd_to = { .tv_sec = 10, .tv_usec = 0 };
+        setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, &snd_to, sizeof(snd_to));
+    }
+
     const size_t chunk = 4096;
     for (size_t off = 0; off < len; off += chunk) {
         size_t n = (len - off < chunk) ? (len - off) : chunk;
