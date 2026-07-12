@@ -62,6 +62,13 @@
 </section>
 
 <section>
+  <h2>Camera (OV3660) &mdash; capture &amp; view</h2>
+  <button onclick="capture(this)">Capture photo</button>
+  <span id="cam-status" style="font-size:12px;color:#8b949e"></span>
+  <div><img id="cam-img" style="max-width:100%;margin-top:8px;border-radius:6px;display:none"></div>
+</section>
+
+<section>
   <h2>Microphone (INMP441) + cloud speech-to-text</h2>
   <label>Seconds</label><input id="mic-sec" value="3">
   <button onclick="run(this,'mic')">Record &amp; transcribe</button>
@@ -158,6 +165,26 @@ async function motor(btn, left, right) {
       in1:N('m-in1'), in2:N('m-in2'), in3:N('m-in3'), in4:N('m-in4'),
       left:left, right:right, ms:N('m-ms') });
   } finally { btn.disabled = false; }
+}
+async function capture(btn) {
+  const img = document.getElementById('cam-img');
+  const status = document.getElementById('cam-status');
+  btn.disabled = true;
+  status.textContent = 'capturing…';
+  try {
+    const r = await fetch('/api/hwtest/camera?t=' + Date.now());
+    const ct = r.headers.get('content-type') || '';
+    if (ct.startsWith('image/')) {
+      const blob = await r.blob();
+      img.src = URL.createObjectURL(blob);
+      img.style.display = 'block';
+      status.textContent = '(' + ct + ', ' + Math.round(blob.size/1024) + ' KB)';
+    } else {
+      const d = await r.json().catch(() => ({ error: 'HTTP ' + r.status }));
+      status.textContent = d.error || 'failed';
+    }
+  } catch (e) { status.textContent = String(e); }
+  finally { btn.disabled = false; }
 }
 run(document.querySelector('button'), 'info');
 </script>

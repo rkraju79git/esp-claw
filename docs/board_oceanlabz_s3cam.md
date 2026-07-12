@@ -83,6 +83,24 @@ Camera uses the pinout above; voice is relocated to camera-safe pins.
 | Motors IN1..IN4 | 1 / 14 / 21 / 47 |
 | Ultrasonic | none — out of pins |
 
-In Mode B set the voice-channel pins in `menuconfig` to the values above, and
-base the build on a board profile that carries the camera devices (adapt
-`esp_sparkbot`, which already has this OV camera pinout).
+Mode B ships as a ready-made board profile: **`oceanlabz_s3cam`** (under
+`boards/community/`). It configures the OV3660 camera on the pinout above,
+enables the voice channel on the relocated pins, and leaves audio to
+`cap_im_voice` (no board-manager I2S, so no pin clash).
+
+```bash
+cd application/edge_agent
+idf.py set-target esp32s3
+idf.py bmgr -c ./boards -b oceanlabz_s3cam
+idf.py menuconfig    # Voice IM Channel -> set your OpenAI API key
+idf.py build flash monitor
+```
+
+### Testing the camera
+
+Open `http://<device-ip>/hwtest` → **Camera** section → **Capture photo**.
+The board grabs a frame from the OV3660 and returns a browser-viewable image:
+if the sensor is delivering JPEG it is served as-is; otherwise the firmware
+builds a 320×240 grayscale BMP from the YUV luminance plane (no on-device JPEG
+encoder needed), which is enough to confirm the camera sees the scene and the
+DVP wiring is correct. Motors on this profile are 1/14/21/47.

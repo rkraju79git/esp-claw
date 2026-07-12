@@ -1,0 +1,18 @@
+version: 1.0.0
+# Peripherals for the OceanLabz ESP32-S3-WROOM CAM board (Mode B: camera + voice)
+#
+# The OV3660 camera occupies GPIO 4,5,6,7,8,9,10,11,12,13,15,16,17,18.
+# Audio (INMP441 mic / MAX98357A amp) is NOT configured here — the cap_im_voice
+# component owns its own I2S channels on the relocated, camera-safe pins
+# (mic 38/39/40, amp 41/42/2). Do not add board-manager i2s here or the pins
+# will conflict.
+peripherals:
+  # SCCB / control bus for the camera (also usable for an I2C OLED/sensor scan).
+  - name: i2c_master
+    type: i2c
+    role: master
+    config:
+      port: 0
+      pins:
+        sda: 4
+        scl: 5

@@ -1,0 +1,39 @@
+version: 1.0.0
+# Devices for the OceanLabz ESP32-S3-WROOM CAM board.
+devices:
+  # OV3660 over DVP (8-bit parallel). Pinout verified against the board and
+  # matches the Freenove ESP32-S3 CAM mapping used by esp_sparkbot.
+  - name: camera
+    type: camera
+    sub_type: dvp
+    version: default
+    config:
+      dvp_config:
+        reset_io: -1
+        pwdn_io: -1
+        vsync_io: 6
+        de_io: 7
+        pclk_io: 13
+        xclk_io: 15
+        xclk_freq: 20000000
+        data_width: CAM_CTLR_DATA_WIDTH_8
+        data_io:
+          data_io_0: 11
+          data_io_1: 9
+          data_io_2: 8
+          data_io_3: 10
+          data_io_4: 12
+          data_io_5: 18
+          data_io_6: 17
+          data_io_7: 16
+          data_io_8: -1
+          data_io_9: -1
+          data_io_10: -1
+          data_io_11: -1
+          data_io_12: -1
+          data_io_13: -1
+          data_io_14: -1
+          data_io_15: -1
+    peripherals:
+      - name: i2c_master
+        frequency: 100000

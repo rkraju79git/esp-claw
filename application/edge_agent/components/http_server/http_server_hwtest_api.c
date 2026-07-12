@@ -26,6 +26,11 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#if CONFIG_APP_CLAW_LUA_MODULE_CAMERA
+#include "camera_hal.h"
+#include "esp_board_manager_includes.h"
+#endif
+
 static const char *TAG = "http_hwtest";
 
 extern const uint8_t hwtest_html_start[] asm("_binary_hwtest_html_start");
@@ -438,6 +443,145 @@ static esp_err_t hwtest_speaker_handler(httpd_req_t *req)
     return http_server_send_json_response(req, root);
 }
 
+/* ---------------------------------------------------------------- camera -- */
+
+#if CONFIG_APP_CLAW_LUA_MODULE_CAMERA
+
+/* Downsample size for the browser preview. */
+#define HWTEST_CAM_PREVIEW_W 320
+#define HWTEST_CAM_PREVIEW_H 240
+#define HWTEST_FOURCC_JPEG   0x4745504A /* v4l2_fourcc('J','P','E','G') */
+
+static const char *hwtest_camera_dev_path(void)
+{
+    dev_camera_handle_t *handle = NULL;
+    esp_err_t err = esp_board_manager_get_device_handle(
+        ESP_BOARD_DEVICE_NAME_CAMERA, (void **)&handle);
+
+    if (err != ESP_OK || !handle || !handle->dev_path) {
+        return NULL;
+    }
+    return handle->dev_path;
+}
+
+/* Build a 24-bit BMP from the luminance plane of a YUYV frame, downsampling
+ * to HWTEST_CAM_PREVIEW_W x HWTEST_CAM_PREVIEW_H. Returns a SPIRAM buffer the
+ * caller must free, or NULL. */
+static uint8_t *hwtest_yuyv_to_bmp(const uint8_t *yuyv, uint32_t sw, uint32_t sh,
+                                   size_t *out_size)
+{
+    const int dw = HWTEST_CAM_PREVIEW_W;
+    const int dh = HWTEST_CAM_PREVIEW_H;
+    const int row_bytes = dw * 3; /* multiple of 4 for dw=320 */
+    const size_t pixels = (size_t)row_bytes * dh;
+    const size_t total = 54 + pixels;
+
+    uint8_t *bmp = heap_caps_malloc(total, MALLOC_CAP_SPIRAM);
+    if (!bmp) {
+        return NULL;
+    }
+    memset(bmp, 0, 54);
+    bmp[0] = 'B';
+    bmp[1] = 'M';
+    uint32_t v = total;         memcpy(bmp + 2, &v, 4);
+    v = 54;                     memcpy(bmp + 10, &v, 4);
+    v = 40;                     memcpy(bmp + 14, &v, 4);
+    v = dw;                     memcpy(bmp + 18, &v, 4);
+    v = dh;                     memcpy(bmp + 22, &v, 4);
+    uint16_t planes = 1, bpp = 24;
+    memcpy(bmp + 26, &planes, 2);
+    memcpy(bmp + 28, &bpp, 2);
+    v = pixels;                 memcpy(bmp + 34, &v, 4);
+
+    /* BMP rows are bottom-up. Y is byte 0 of each YUYV pair. */
+    for (int y = 0; y < dh; y++) {
+        uint32_t sy = (uint32_t)y * sh / dh;
+        const uint8_t *srow = yuyv + (size_t)sy * sw * 2;
+        uint8_t *drow = bmp + 54 + (size_t)(dh - 1 - y) * row_bytes;
+        for (int x = 0; x < dw; x++) {
+            uint32_t sx = (uint32_t)x * sw / dw;
+            uint8_t luma = srow[sx * 2];
+            *drow++ = luma;
+            *drow++ = luma;
+            *drow++ = luma;
+        }
+    }
+    *out_size = total;
+    return bmp;
+}
+
+static esp_err_t hwtest_camera_handler(httpd_req_t *req)
+{
+    const char *dev_path = hwtest_camera_dev_path();
+
+    if (!dev_path) {
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        return hwtest_reply_error(req, "camera device not found");
+    }
+    if (camera_is_open()) {
+        httpd_resp_set_status(req, "409 Conflict");
+        return hwtest_reply_error(req, "camera busy (in use by a skill)");
+    }
+
+    /* Prefer JPEG; fall back to the driver default (YUV422). */
+    camera_open_opts_t opts = { .pixel_format = HWTEST_FOURCC_JPEG };
+    esp_err_t err = camera_open(dev_path, &opts);
+    if (err != ESP_OK) {
+        err = camera_open(dev_path, NULL);
+    }
+    if (err != ESP_OK) {
+        return hwtest_reply_error(req, esp_err_to_name(err));
+    }
+
+    /* Discard a couple of frames so exposure/gain settle. */
+    uint8_t *frame = NULL;
+    size_t frame_bytes = 0;
+    camera_frame_info_t info = {0};
+    for (int i = 0; i < 3; i++) {
+        if (frame) {
+            camera_release_frame(frame);
+            frame = NULL;
+        }
+        err = camera_capture_frame(1000, &frame, &frame_bytes, &info);
+        if (err != ESP_OK) {
+            camera_close();
+            return hwtest_reply_error(req, esp_err_to_name(err));
+        }
+    }
+
+    esp_err_t send_err;
+    if (info.pixel_format == HWTEST_FOURCC_JPEG ||
+        strcmp(info.pixel_format_str, "JPEG") == 0) {
+        httpd_resp_set_type(req, "image/jpeg");
+        send_err = httpd_resp_send(req, (const char *)frame, frame_bytes);
+    } else if (frame_bytes >= (size_t)info.width * info.height * 2 &&
+               info.width && info.height) {
+        size_t bmp_size = 0;
+        uint8_t *bmp = hwtest_yuyv_to_bmp(frame, info.width, info.height,
+                                          &bmp_size);
+        if (bmp) {
+            httpd_resp_set_type(req, "image/bmp");
+            send_err = httpd_resp_send(req, (const char *)bmp, bmp_size);
+            free(bmp);
+        } else {
+            send_err = hwtest_reply_error(req, "preview alloc failed");
+        }
+    } else {
+        char msg[128];
+        snprintf(msg, sizeof(msg),
+                 "captured %ux%u %s, %u bytes (no browser preview for format)",
+                 (unsigned)info.width, (unsigned)info.height,
+                 info.pixel_format_str, (unsigned)frame_bytes);
+        send_err = hwtest_reply_error(req, msg);
+    }
+
+    camera_release_frame(frame);
+    camera_close();
+    return send_err;
+}
+
+#endif /* CONFIG_APP_CLAW_LUA_MODULE_CAMERA */
+
 /* ------------------------------------------------------------------ page -- */
 
 static esp_err_t hwtest_page_handler(httpd_req_t *req)
@@ -458,6 +602,9 @@ esp_err_t http_server_register_hwtest_routes(httpd_handle_t server)
         { .uri = "/api/hwtest/oled", .method = HTTP_POST, .handler = hwtest_oled_handler },
         { .uri = "/api/hwtest/mic", .method = HTTP_POST, .handler = hwtest_mic_handler },
         { .uri = "/api/hwtest/speaker", .method = HTTP_POST, .handler = hwtest_speaker_handler },
+#if CONFIG_APP_CLAW_LUA_MODULE_CAMERA
+        { .uri = "/api/hwtest/camera", .method = HTTP_GET, .handler = hwtest_camera_handler },
+#endif
     };
 
     for (size_t i = 0; i < sizeof(handlers) / sizeof(handlers[0]); i++) {

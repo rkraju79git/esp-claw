@@ -1,0 +1,5 @@
+board: oceanlabz_s3cam
+chip: esp32s3
+version: 1.0.0
+description: "OceanLabz ESP32-S3-WROOM CAM (N16R8 + OV3660)"
+manufacturer: "OceanLabz"
