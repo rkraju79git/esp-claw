@@ -45,6 +45,23 @@ esp_err_t cap_im_voice_test_mic(int seconds,
 /* Play a sine test tone on the speaker. */
 esp_err_t cap_im_voice_test_tone(int freq_hz, int duration_ms);
 
+/* Mic wiring diagnostic: raw I2S bus statistics per stereo slot. Values are
+ * raw 32-bit slot samples (INMP441: 24-bit data in the high bits). */
+typedef struct {
+    int32_t left_peak;      /* max |sample| seen on the LEFT slot */
+    int32_t right_peak;     /* max |sample| seen on the RIGHT slot */
+    int32_t left_dc;        /* mean sample (DC offset), LEFT */
+    int32_t right_dc;       /* mean sample (DC offset), RIGHT */
+    int     left_nonzero_pct;  /* % of samples that are not exactly 0 */
+    int     right_nonzero_pct;
+} cap_im_voice_mic_diag_t;
+
+/* Sample ~1/4 s from each stereo slot in turn and report raw bus statistics.
+ * Distinguishes: dead SD line (all zero), signal on the wrong channel (L/R
+ * pin not grounded), and a healthy mic. Restores the normal left-slot config
+ * before returning. */
+esp_err_t cap_im_voice_mic_diag(cap_im_voice_mic_diag_t *out);
+
 /*
  * Initialize I2S mic/speaker, start the push-to-talk and TTS playback tasks.
  * Call after app_claw_start() so the local IM gateway is available.

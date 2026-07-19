@@ -414,6 +414,51 @@ static esp_err_t hwtest_mic_handler(httpd_req_t *req)
     return http_server_send_json_response(req, root);
 }
 
+/* Raw-slot peak above this (32-bit raw; INMP441 data sits in the high bits, so
+ * the ambient noise floor of a live mic is far larger) counts as "signal". */
+#define HWTEST_MIC_DIAG_ALIVE 100000
+
+static esp_err_t hwtest_micdiag_handler(httpd_req_t *req)
+{
+    cap_im_voice_mic_diag_t d;
+    esp_err_t err = cap_im_voice_mic_diag(&d);
+
+    if (err != ESP_OK) {
+        return hwtest_reply_error(req, esp_err_to_name(err));
+    }
+
+    bool left_alive = d.left_peak > HWTEST_MIC_DIAG_ALIVE;
+    bool right_alive = d.right_peak > HWTEST_MIC_DIAG_ALIVE;
+    const char *verdict;
+    if (left_alive) {
+        verdict = "MIC OK — signal on the left channel (the one the firmware uses)";
+    } else if (right_alive) {
+        verdict = "Signal on the RIGHT channel only: the mic's L/R pin is not "
+                  "grounded. Jumper L/R to GND.";
+    } else if (d.left_nonzero_pct == 0 && d.right_nonzero_pct == 0) {
+        verdict = "SD line totally silent (all zero): no data reaches GPIO 40. "
+                  "Check the SD wire end-to-end and the solder joints on the "
+                  "mic header pins; also verify mic VDD has 3.3V.";
+    } else {
+        verdict = "Bus alive but only a tiny noise floor on both channels: the "
+                  "mic is likely unpowered (check VDD=3.3V and GND) or SCK/WS "
+                  "are swapped.";
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    cJSON_AddStringToObject(root, "verdict", verdict);
+    cJSON *left = cJSON_AddObjectToObject(root, "left");
+    cJSON_AddNumberToObject(left, "peak", d.left_peak);
+    cJSON_AddNumberToObject(left, "dc", d.left_dc);
+    cJSON_AddNumberToObject(left, "nonzero_pct", d.left_nonzero_pct);
+    cJSON *right = cJSON_AddObjectToObject(root, "right");
+    cJSON_AddNumberToObject(right, "peak", d.right_peak);
+    cJSON_AddNumberToObject(right, "dc", d.right_dc);
+    cJSON_AddNumberToObject(right, "nonzero_pct", d.right_nonzero_pct);
+    return http_server_send_json_response(req, root);
+}
+
 static esp_err_t hwtest_speaker_handler(httpd_req_t *req)
 {
     cJSON *body = NULL;
@@ -692,6 +737,7 @@ esp_err_t http_server_register_hwtest_routes(httpd_handle_t server)
         { .uri = "/api/hwtest/ultrasonic", .method = HTTP_POST, .handler = hwtest_ultrasonic_handler },
         { .uri = "/api/hwtest/oled", .method = HTTP_POST, .handler = hwtest_oled_handler },
         { .uri = "/api/hwtest/mic", .method = HTTP_POST, .handler = hwtest_mic_handler },
+        { .uri = "/api/hwtest/micdiag", .method = HTTP_GET, .handler = hwtest_micdiag_handler },
         { .uri = "/api/hwtest/speaker", .method = HTTP_POST, .handler = hwtest_speaker_handler },
 #if CONFIG_APP_CLAW_LUA_MODULE_CAMERA
         { .uri = "/api/hwtest/camera", .method = HTTP_GET, .handler = hwtest_camera_handler },

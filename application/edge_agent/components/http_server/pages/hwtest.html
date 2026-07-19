@@ -81,6 +81,7 @@
   <h2>Microphone (INMP441) + cloud speech-to-text</h2>
   <label>Seconds</label><input id="mic-sec" value="3">
   <button onclick="run(this,'mic')">Record &amp; transcribe</button>
+  <button onclick="run(this,'micdiag')">Wiring check</button>
   <div class="out" id="out-mic"></div>
 </section>
 
@@ -157,6 +158,7 @@ async function run(btn, what) {
         { sda:N('oled-sda'), scl:N('oled-scl'), addr:N('oled-addr') });
     if (what === 'mic')      await call('mic', 'POST', '/api/hwtest/mic',
         { seconds:N('mic-sec') });
+    if (what === 'micdiag')  await call('mic', 'GET', '/api/hwtest/micdiag');
     if (what === 'tone')     await call('speaker', 'POST', '/api/hwtest/speaker',
         { type:'tone', freq:N('spk-freq'), ms:N('spk-ms') });
     if (what === 'tts')      await call('speaker', 'POST', '/api/hwtest/speaker',

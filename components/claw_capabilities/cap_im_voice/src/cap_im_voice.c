@@ -557,6 +557,81 @@ esp_err_t cap_im_voice_test_mic(int seconds,
     return ESP_OK;
 }
 
+/* Reconfigure the RX channel onto one stereo slot and gather raw statistics.
+ * Discards the first chunk (stale DMA), then samples ~1/4 s. */
+static esp_err_t mic_diag_slot(i2s_std_slot_mask_t mask, int32_t *peak_out,
+                               int32_t *dc_out, int *nonzero_pct_out)
+{
+    static int32_t raw[VOICE_MIC_CHUNK_SAMPLES];
+
+    ESP_RETURN_ON_ERROR(i2s_channel_disable(s_rx_chan), TAG, "diag disable");
+    i2s_std_slot_config_t slot = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(
+        I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_MONO);
+    slot.slot_mask = mask;
+    ESP_RETURN_ON_ERROR(i2s_channel_reconfig_std_slot(s_rx_chan, &slot), TAG,
+                        "diag reconfig");
+    ESP_RETURN_ON_ERROR(i2s_channel_enable(s_rx_chan), TAG, "diag enable");
+
+    int64_t sum = 0;
+    int32_t peak = 0;
+    size_t total = 0, nonzero = 0;
+    const int chunks = 9; /* first discarded + 8 x 512 = 4096 samples ~ 1/4 s */
+    for (int c = 0; c < chunks; c++) {
+        size_t bytes_read = 0;
+        esp_err_t err = i2s_channel_read(s_rx_chan, raw, sizeof(raw),
+                                         &bytes_read, pdMS_TO_TICKS(400));
+        if (err != ESP_OK || c == 0) {
+            continue;
+        }
+        size_t n = bytes_read / sizeof(int32_t);
+        for (size_t i = 0; i < n; i++) {
+            int32_t v = raw[i];
+            sum += v;
+            if (v != 0) {
+                nonzero++;
+            }
+            int32_t a = v < 0 ? -v : v;
+            if (a > peak) {
+                peak = a;
+            }
+        }
+        total += n;
+    }
+
+    *peak_out = peak;
+    *dc_out = total ? (int32_t)(sum / (int64_t)total) : 0;
+    *nonzero_pct_out = total ? (int)((nonzero * 100) / total) : 0;
+    return ESP_OK;
+}
+
+esp_err_t cap_im_voice_mic_diag(cap_im_voice_mic_diag_t *out)
+{
+    if (!out) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_rx_chan || s_recording) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    memset(out, 0, sizeof(*out));
+    s_recording = true; /* keep the PTT task off the mic */
+
+    esp_err_t err = mic_diag_slot(I2S_STD_SLOT_LEFT, &out->left_peak,
+                                  &out->left_dc, &out->left_nonzero_pct);
+    if (err == ESP_OK) {
+        err = mic_diag_slot(I2S_STD_SLOT_RIGHT, &out->right_peak,
+                            &out->right_dc, &out->right_nonzero_pct);
+    }
+
+    /* Always restore the normal left-slot configuration. */
+    int32_t p, d;
+    int nz;
+    esp_err_t restore_err = mic_diag_slot(I2S_STD_SLOT_LEFT, &p, &d, &nz);
+
+    s_recording = false;
+    return err != ESP_OK ? err : restore_err;
+}
+
 esp_err_t cap_im_voice_test_tone(int freq_hz, int duration_ms)
 {
     if (freq_hz < 50 || freq_hz > 8000 || duration_ms < 50 ||
@@ -627,6 +702,12 @@ esp_err_t cap_im_voice_test_tone(int freq_hz, int duration_ms)
 {
     (void)freq_hz;
     (void)duration_ms;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+esp_err_t cap_im_voice_mic_diag(cap_im_voice_mic_diag_t *out)
+{
+    (void)out;
     return ESP_ERR_NOT_SUPPORTED;
 }
 
