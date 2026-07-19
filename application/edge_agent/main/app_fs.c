@@ -11,6 +11,7 @@
 #include <errno.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "ramfs.h"
 #include "wear_levelling.h"
@@ -179,6 +180,24 @@ static const char *storage_sdcard_mount_point(void)
 }
 #endif  /* CONFIG_ESP_BOARD_DEV_FS_FAT_SUPPORT */
 
+// A corrupt FAT can still mount "successfully" while reporting every cluster
+// used (used == total), so format_if_mount_failed never triggers and every
+// write fails with FR_DENIED — which used to boot-loop the app. Detect that
+// state by actually writing a probe file.
+static bool storage_probe_writable(const char *base_path)
+{
+    char probe[48];
+    snprintf(probe, sizeof(probe), "%s/.wprobe", base_path);
+    FILE *f = fopen(probe, "w");
+    if (!f) {
+        return false;
+    }
+    bool ok = fputc('x', f) == 'x' && fflush(f) == 0;
+    fclose(f);
+    unlink(probe);
+    return ok;
+}
+
 static esp_err_t app_fs_init_system(void)
 {
     esp_vfs_fat_mount_config_t mount_config = {
@@ -237,6 +256,24 @@ static esp_err_t app_fs_init_storage(void)
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Flash fatfs mount failed: %s", esp_err_to_name(err));
         return err;
+    }
+
+    // 2b. The partition mounted, but is it actually writable? A corrupt FAT
+    //     that mounts full (used == total) would otherwise wedge the app in a
+    //     write-fail boot loop. Reformat in place and re-probe.
+    if (!storage_probe_writable(s_flash_storage_base_path)) {
+        ESP_LOGW(TAG, "Flash fatfs mounted but not writable (corrupt/full FAT); reformatting");
+        err = esp_vfs_fat_spiflash_format_rw_wl(s_flash_storage_base_path,
+                                                APP_FS_STORAGE_PARTITION_LABEL);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Flash fatfs reformat failed: %s", esp_err_to_name(err));
+            return err;
+        }
+        if (!storage_probe_writable(s_flash_storage_base_path)) {
+            ESP_LOGE(TAG, "Flash fatfs still not writable after reformat");
+            return ESP_FAIL;
+        }
+        ESP_LOGI(TAG, "Flash fatfs reformatted; recovery seed will repopulate it");
     }
 
     // 3. Restore any files present under /system/.recovery but missing from the
