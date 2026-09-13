@@ -25,6 +25,12 @@ CONFIG_CAMERA_OV3660_DVP_YUV422_YUYV_640X480_10FPS=y
 CONFIG_CAMERA_OV3660_DVP_DEFAULT_FMT_YUV422_YUYV_640X480_10FPS=y
 CONFIG_APP_CLAW_LUA_MODULE_CAMERA=y
 
+# The camera module is mounted upside-down on this board: rotate the image
+# 180 degrees = vertical flip + horizontal mirror together (VFLIP alone would
+# un-flip it but leave it mirrored).
+CONFIG_LUA_MODULE_CAMERA_ENABLE_VFLIP=y
+CONFIG_LUA_MODULE_CAMERA_ENABLE_HMIRROR=y
+
 # Voice channel enabled, relocated to camera-safe pins (Mode B).
 # Set your OpenAI API key with `idf.py menuconfig` before flashing.
 CONFIG_APP_CLAW_CAP_IM_VOICE=y
