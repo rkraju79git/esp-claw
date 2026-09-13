@@ -97,13 +97,13 @@ build_application_edge_agent:
         EXAMPLE_CONFIG: "sdkconfig.console.jtag=jtag"
 
       - IMAGE: ["espressif/idf:release-v5.5"]
-        EXAMPLE_BOARD: esp32_p4_function_ev
+        EXAMPLE_BOARD: ["esp32_p4_function_ev", "esp32_p4x_function_ev"]
         EXAMPLE_TARGET: esp32p4
         EXAMPLE_BOARD_BRAND: "espressif"
         EXAMPLE_CONFIG: "sdkconfig.console.jtag=jtag"
 
       - IMAGE: ["espressif/idf:release-v5.5"]
-        EXAMPLE_BOARD: ["esp32_p4x_function_ev", "esp32_p4_eye", "esp32_p4x_eye"]
+        EXAMPLE_BOARD: ["esp32_p4_eye", "esp32_p4x_eye"]
         EXAMPLE_TARGET: esp32p4
         EXAMPLE_BOARD_BRAND: "espressif"
 
@@ -201,6 +201,11 @@ build_application_edge_agent:
         EXAMPLE_BOARD: ["xiao_esp32s3_sense"]
         EXAMPLE_TARGET: esp32s3
         EXAMPLE_BOARD_BRAND: "seeedstudio"
+
+      - IMAGE: ["espressif/idf:release-v5.5"]
+        EXAMPLE_BOARD: ["metalio_claw_4"]
+        EXAMPLE_TARGET: esp32p4
+        EXAMPLE_BOARD_BRAND: "cloudzao"
 
 build_application_mcp_server_point:
   extends:
