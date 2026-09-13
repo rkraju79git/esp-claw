@@ -2,6 +2,22 @@
 
 This file provides guidance to agents when working with code in this repository.
 
+## THIS FORK: OceanLabz voice/vision bot — read first
+
+This fork adds a voice channel and a hardware test bench for the OceanLabz
+ESP32-S3-WROOM-1 N16R8 CAM board. **Before doing anything, read
+`docs/HANDOFF.md`** — full project status, build/flash workflow, and hardware
+gotchas. Key facts that override the generic guidance below:
+
+- Working branch: `feature/voice-channel`. Board: `oceanlabz_s3cam`
+  (NOT `esp32_S3_DevKitC_1`): `idf.py bmgr -c ./boards -b oceanlabz_s3cam`.
+- ESP-IDF **v5.5.4** at `~/esp/esp-idf-v5.5.4` (v5.3 does not build this
+  repo). The user's shell has `getidf` (activate IDF) and `flashbot`
+  (pull + regen board config if missing + flash monitor) in `~/.zshrc`.
+- The physical board is usually connected over USB; the boot log line
+  `Wi-Fi STA ready: <ip>` gives its current address, and the hardware test
+  bench is at `http://<ip>/hwtest`.
+
 ## Project Overview
 
 ESP-Claw is an ESP-IDF firmware project for running an AI agent framework on Espressif IoT devices. The main application is `application/edge_agent/`; reusable firmware components live under `components/`. The repo also contains board definitions, build-time FATFS content, documentation, and the embedded device settings UI.
